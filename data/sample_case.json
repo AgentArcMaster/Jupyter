@@ -1,0 +1,33 @@
+{
+  "test_cases": [
+    {
+      "case_id": "case_kolkata_01",
+      "raw_text": "Rahul met Arjun at Park Street. Arjun transferred ₹50,000 to Vikram. Vikram owns vehicle WB02AB1234. Vikram contacted Sameer. Sameer met Rahul.",
+      "expected_output": {
+        "entities": [
+          { "id": "p1", "name": "Rahul", "type": "PERSON" },
+          { "id": "p2", "name": "Arjun", "type": "PERSON" },
+          { "id": "p3", "name": "Vikram", "type": "PERSON" },
+          { "id": "p4", "name": "Sameer", "type": "PERSON" },
+          { "id": "l1", "name": "Park Street", "type": "LOCATION" },
+          { "id": "m1", "name": "₹50,000", "type": "MONEY" },
+          { "id": "v1", "name": "WB02AB1234", "type": "VEHICLE" }
+        ],
+        "relationships": [
+          { "source": "p1", "target": "p2", "type": "MET" },
+          { "source": "p1", "target": "l1", "type": "VISITED" },
+          { "source": "p2", "target": "l1", "type": "VISITED" },
+          { "source": "p2", "target": "m1", "type": "TRANSFERRED_MONEY" },
+          { "source": "m1", "target": "p3", "type": "TRANSFERRED_MONEY" },
+          { "source": "p3", "target": "v1", "type": "OWNS" },
+          { "source": "p3", "target": "p4", "type": "CONTACTED" },
+          { "source": "p4", "target": "p1", "type": "MET" }
+        ],
+        "insights": [
+          { "entity": "Rahul", "reason": "Central hub: connected across multiple meetings." },
+          { "entity": "Vikram", "reason": "High degree connectivity (money receiver, vehicle owner, communicator)." }
+        ]
+      }
+    }
+  ]
+}
