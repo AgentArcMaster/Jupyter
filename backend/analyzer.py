@@ -1,95 +1,251 @@
-import os
-import json
 import re
-from typing import Dict, Any
-from graph_utils import compute_insights
 
-# Optional: Initialize Gemini / OpenAI client here if API key is present
-# e.g., google.genai, openai, etc.
-USE_MOCK_FALLBACK = os.getenv("USE_MOCK_FALLBACK", "false").lower() == "true"
 
-SYSTEM_PROMPT = """You are an investigative intelligence analyst engine.
-Extract entities and relationships from messy police / investigative notes.
-
-Allowed Entity Types:
-- PERSON, LOCATION, VEHICLE, PHONE, ORGANIZATION, MONEY
-
-Allowed Relationship Types:
-- MET, CONTACTED, TRANSFERRED_MONEY, OWNS, VISITED, WORKS_FOR, CONNECTED_TO
-
-Strict Rules:
-1. Every entity MUST have a unique "id" (e.g. p1, p2, l1, v1), "name", and "type".
-2. Every relationship MUST reference valid entity IDs in "source" and "target", and have a valid "type".
-3. Return ONLY a valid JSON object matching this schema:
-{
-  "entities": [{"id": "...", "name": "...", "type": "..."}],
-  "relationships": [{"source": "...", "target": "...", "type": "..."}]
+ENTITY_TYPES = {
+    "PERSON",
+    "LOCATION",
+    "VEHICLE",
+    "PHONE",
+    "ORGANIZATION",
+    "MONEY"
 }
-Do not include markdown fences, preambles, or explanations."""
 
-def _clean_json_response(raw_text: str) -> Dict[str, Any]:
-    """Strips markdown code ticks if returned by the LLM."""
-    match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-    if match:
-        return json.loads(match.group(0))
-    return json.loads(raw_text)
+RELATIONSHIP_TYPES = {
+    "MET",
+    "CONTACTED",
+    "TRANSFERRED_MONEY",
+    "OWNS",
+    "VISITED",
+    "WORKS_FOR",
+    "CONNECTED_TO"
+}
 
-def _get_mock_fallback(text: str) -> Dict[str, Any]:
-    """Guarantees immediate team unblocking if LLM API is unavailable or slow."""
-    return {
-        "entities": [
-            { "id": "p1", "name": "Rahul", "type": "PERSON" },
-            { "id": "p2", "name": "Arjun", "type": "PERSON" },
-            { "id": "p3", "name": "Vikram", "type": "PERSON" },
-            { "id": "p4", "name": "Sameer", "type": "PERSON" },
-            { "id": "l1", "name": "Park Street", "type": "LOCATION" },
-            { "id": "m1", "name": "₹50,000", "type": "MONEY" },
-            { "id": "v1", "name": "WB02AB1234", "type": "VEHICLE" }
-        ],
-        "relationships": [
-            { "source": "p1", "target": "p2", "type": "MET" },
-            { "source": "p1", "target": "l1", "type": "VISITED" },
-            { "source": "p2", "target": "l1", "type": "VISITED" },
-            { "source": "p2", "target": "m1", "type": "TRANSFERRED_MONEY" },
-            { "source": "m1", "target": "p3", "type": "TRANSFERRED_MONEY" },
-            { "source": "p3", "target": "v1", "type": "OWNS" },
-            { "source": "p3", "target": "p4", "type": "CONTACTED" },
-            { "source": "p4", "target": "p1", "type": "MET" }
-        ]
-    }
 
-def extract_intelligence(text: str) -> Dict[str, Any]:
+def analyze_text(text):
     """
-    Main extraction function.
-    Input: raw text string.
-    Output: { entities: [...], relationships: [...], insights: [...] }
+    Input:
+        Raw investigation text
+
+    Output:
+        Fixed JSON-compatible structure containing
+        entities, relationships and insights.
     """
-    if not text or not text.strip():
-        return {"entities": [], "relationships": [], "insights": []}
 
-    extracted_data = None
+    entities = []
+    relationships = []
 
-    if not USE_MOCK_FALLBACK:
-        try:
-            # --- LLM API CALL BLOCK ---
-            # Replace with your active LLM provider SDK call:
-            # response = client.models.generate_content(
-            #     model="gemini-2.5-flash",
-            #     contents=f"{SYSTEM_PROMPT}\n\nEvidence Text:\n{text}"
-            # )
-            # extracted_data = _clean_json_response(response.text)
-            pass
-        except Exception as e:
-            print(f"[WARN] LLM API failure: {e}. Falling back to default baseline.")
+    entity_map = {}
 
-    # Fallback if API is unconfigured or failed
-    if not extracted_data:
-        extracted_data = _get_mock_fallback(text)
+    def add_entity(name, entity_type):
+        key = (name, entity_type)
 
-    # Compute graph metrics & add intelligence layer
-    entities = extracted_data.get("entities", [])
-    relationships = extracted_data.get("relationships", [])
-    insights = compute_insights(entities, relationships)
+        if key not in entity_map:
+            prefix = {
+                "PERSON": "p",
+                "LOCATION": "l",
+                "VEHICLE": "v",
+                "PHONE": "ph",
+                "ORGANIZATION": "o",
+                "MONEY": "m"
+            }[entity_type]
+
+            entity_id = f"{prefix}{sum(
+                1 for e in entities if e["type"] == entity_type
+            ) + 1}"
+
+            entity = {
+                "id": entity_id,
+                "name": name,
+                "type": entity_type
+            }
+
+            entities.append(entity)
+            entity_map[key] = entity_id
+
+        return entity_map[key]
+
+    # -------------------------
+    # MONEY
+    # -------------------------
+
+    money_pattern = r"(₹[\d,]+|\$\d+(?:,\d+)*)"
+
+    for match in re.findall(money_pattern, text):
+        add_entity(match, "MONEY")
+
+    # -------------------------
+    # VEHICLE
+    # -------------------------
+
+    vehicle_pattern = r"\b[A-Z]{2}\d{2}[A-Z]{1,3}\d{4}\b"
+
+    for match in re.findall(vehicle_pattern, text):
+        add_entity(match, "VEHICLE")
+
+    # -------------------------
+    # PHONE
+    # -------------------------
+
+    phone_pattern = r"\b(?:\+91[- ]?)?[6-9]\d{9}\b"
+
+    for match in re.findall(phone_pattern, text):
+        add_entity(match, "PHONE")
+
+    # -------------------------
+    # LOCATIONS
+    # -------------------------
+
+    location_pattern = r"\b(?:Park Street|Salt Lake|New Town|Kolkata)\b"
+
+    for match in re.findall(location_pattern, text, re.IGNORECASE):
+        add_entity(match, "LOCATION")
+
+    # -------------------------
+    # ORGANIZATIONS
+    # -------------------------
+
+    organization_pattern = r"\b[A-Z][A-Za-z0-9]*(?: Solutions| Technologies| Corporation| Ltd| Inc)\b"
+
+    for match in re.findall(organization_pattern, text):
+        add_entity(match.strip(), "ORGANIZATION")
+
+    # -------------------------
+    # PERSONS
+    # -------------------------
+
+    known_people = [
+        "Rahul",
+        "Arjun",
+        "Vikram",
+        "Sameer",
+        "Amit",
+        "Rohan",
+        "Priya"
+    ]
+
+    for person in known_people:
+        if re.search(rf"\b{re.escape(person)}\b", text):
+            add_entity(person, "PERSON")
+
+    # -------------------------
+    # RELATIONSHIPS
+    # -------------------------
+
+    def get_person(name):
+        return entity_map.get((name, "PERSON"))
+
+    def get_entity(name, entity_type):
+        return entity_map.get((name, entity_type))
+
+    # Rahul met Arjun
+    for a, b in re.findall(
+        r"\b(Rahul|Arjun|Vikram|Sameer|Amit|Rohan|Priya)\s+met\s+"
+        r"(Rahul|Arjun|Vikram|Sameer|Amit|Rohan|Priya)\b",
+        text,
+        re.IGNORECASE
+    ):
+        source = get_person(a.capitalize())
+        target = get_person(b.capitalize())
+
+        if source and target:
+            relationships.append({
+                "source": source,
+                "target": target,
+                "type": "MET"
+            })
+
+    # contacted
+    for a, b in re.findall(
+        r"\b(Rahul|Arjun|Vikram|Sameer|Amit|Rohan|Priya)\s+contacted\s+"
+        r"(Rahul|Arjun|Vikram|Sameer|Amit|Rohan|Priya)\b",
+        text,
+        re.IGNORECASE
+    ):
+        source = get_person(a.capitalize())
+        target = get_person(b.capitalize())
+
+        if source and target:
+            relationships.append({
+                "source": source,
+                "target": target,
+                "type": "CONTACTED"
+            })
+
+    # transferred money
+    for a, amount, b in re.findall(
+        r"\b(Rahul|Arjun|Vikram|Sameer|Amit|Rohan|Priya)"
+        r"\s+transferred\s+(₹[\d,]+|\$\d+(?:,\d+)*)\s+to\s+"
+        r"(Rahul|Arjun|Vikram|Sameer|Amit|Rohan|Priya)\b",
+        text,
+        re.IGNORECASE
+    ):
+        source = get_person(a.capitalize())
+        target = get_person(b.capitalize())
+        money = get_entity(amount, "MONEY")
+
+        if source and target:
+            relationships.append({
+                "source": source,
+                "target": target,
+                "type": "TRANSFERRED_MONEY",
+                "amount": money
+            })
+
+    # owns vehicle
+    for person, vehicle in re.findall(
+        r"\b(Rahul|Arjun|Vikram|Sameer|Amit|Rohan|Priya)"
+        r"\s+owns\s+(?:vehicle\s+)?([A-Z]{2}\d{2}[A-Z]{1,3}\d{4})\b",
+        text,
+        re.IGNORECASE
+    ):
+        source = get_person(person.capitalize())
+        target = get_entity(vehicle.upper(), "VEHICLE")
+
+        if source and target:
+            relationships.append({
+                "source": source,
+                "target": target,
+                "type": "OWNS"
+            })
+
+    # works for
+    for person, organization in re.findall(
+        r"\b(Rahul|Arjun|Vikram|Sameer|Amit|Rohan|Priya)"
+        r"\s+works\s+for\s+([A-Z][A-Za-z0-9]*(?: Solutions| Technologies| Corporation| Ltd| Inc))",
+        text
+    ):
+        source = get_person(person.capitalize())
+        target = get_entity(organization.strip(), "ORGANIZATION")
+
+        if source and target:
+            relationships.append({
+                "source": source,
+                "target": target,
+                "type": "WORKS_FOR"
+            })
+
+    # visited location
+    for person, location in re.findall(
+        r"\b(Rahul|Arjun|Vikram|Sameer|Amit|Rohan|Priya)"
+        r"\s+(?:visited|met at)\s+"
+        r"(Park Street|Salt Lake|New Town|Kolkata)\b",
+        text,
+        re.IGNORECASE
+    ):
+        source = get_person(person.capitalize())
+
+        location_name = location.title()
+
+        target = get_entity(location_name, "LOCATION")
+
+        if source and target:
+            relationships.append({
+                "source": source,
+                "target": target,
+                "type": "VISITED"
+            })
+
+    insights = calculate_insights(entities, relationships)
 
     return {
         "entities": entities,
@@ -97,7 +253,33 @@ def extract_intelligence(text: str) -> Dict[str, Any]:
         "insights": insights
     }
 
-if __name__ == "__main__":
-    sample_text = "Rahul met Arjun at Park Street. Arjun transferred ₹50,000 to Vikram. Vikram owns vehicle WB02AB1234."
-    result = extract_intelligence(sample_text)
-    print(json.dumps(result, indent=2))
+
+def calculate_insights(entities, relationships):
+    connection_count = {}
+
+    for entity in entities:
+        connection_count[entity["id"]] = 0
+
+    for relationship in relationships:
+        source = relationship["source"]
+        target = relationship["target"]
+
+        if source in connection_count:
+            connection_count[source] += 1
+
+        if target in connection_count:
+            connection_count[target] += 1
+
+    insights = []
+
+    for entity in entities:
+        count = connection_count[entity["id"]]
+
+        if entity["type"] == "PERSON" and count >= 3:
+            insights.append({
+                "entity": entity["name"],
+                "reason": "Highly connected node",
+                "connections": count
+            })
+
+    return insights
